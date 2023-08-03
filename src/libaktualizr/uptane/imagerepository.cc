@@ -174,7 +174,7 @@ void ImageRepository::verifyTargets(const std::string& targets_raw, bool prefetc
       throw Uptane::VersionMismatch(RepositoryType::IMAGE, Uptane::Role::TARGETS);
     }
   } catch (const Exception& e) {
-    LOG_ERROR << "Signature verification for Image repo Targets metadata failed";
+    LOG_INFO << "Signature verification for Image repo Targets metadata failed";
     throw;
   }
 }
@@ -190,7 +190,7 @@ std::shared_ptr<Uptane::Targets> ImageRepository::verifyDelegation(const std::st
     auto signer = std::make_shared<MetaWithKeys>(parent_target);
     return std::make_shared<Uptane::Targets>(Targets(RepositoryType::Image(), role, delegation_json, signer));
   } catch (const Exception& e) {
-    LOG_ERROR << "Signature verification for Image repo delegated Targets metadata failed";
+    LOG_INFO << "Signature verification for Image repo delegated Targets metadata failed";
     throw;
   }
 
@@ -254,7 +254,7 @@ void ImageRepository::updateMeta(INvStorage& storage, const IMetadataFetcher& fe
         fetch_snapshot = false;
         LOG_DEBUG << "Skipping Image repo Snapshot download; stored version is still current.";
       } catch (const Uptane::Exception& e) {
-        LOG_ERROR << "Image repo Snapshot verification failed: " << e.what();
+        LOG_INFO << "Image repo Snapshot verification failed: " << e.what();
       }
       local_version = snapshot.version();
     } else {
@@ -282,7 +282,7 @@ void ImageRepository::updateMeta(INvStorage& storage, const IMetadataFetcher& fe
         fetch_targets = false;
         LOG_DEBUG << "Skipping Image repo Targets download; stored version is still current.";
       } catch (const std::exception& e) {
-        LOG_ERROR << "Image repo Target verification failed: " << e.what();
+        LOG_INFO << "Image repo Target verification failed: " << e.what();
       }
       if (targets) {
         local_version = targets->version();
