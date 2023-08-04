@@ -83,6 +83,13 @@ add_executable(aktualizr_uptane_vector_tests uptane_vector_tests.cc)
 target_link_libraries(aktualizr_uptane_vector_tests ${TEST_LIBS})
 add_dependencies(build_tests aktualizr_uptane_vector_tests)
 
+
+add_custom_target(test-uptane-vectors COMMAND CTEST_OUTPUT_ON_FAILURE=1 ${CMAKE_CTEST_COMMAND} ${CTEST_EXTRA_ARGS} -R "test_uptane_vectors"
+                  DEPENDS aktualizr_uptane_vector_tests
+                  USES_TERMINAL
+                  WORKING_DIRECTORY ${PROJECT_BINARY_DIR}
+                  )
+
 if(TESTSUITE_VALGRIND)
     set(VECTOR_TESTS_ARGS -v ${CMAKE_CURRENT_BINARY_DIR}/../run-valgrind)
 endif(TESTSUITE_VALGRIND)
