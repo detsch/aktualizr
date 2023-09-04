@@ -125,6 +125,10 @@ HttpClient::~HttpClient() {
   curl_easy_cleanup(curl);
 }
 
+CURL* HttpClient::dupHandle(CURL* const curl_in, const bool using_pkcs11) {
+  return Utils::curlDupHandleWrapper(curl_in, using_pkcs11, nullptr);
+}
+
 void HttpClient::setCerts(const std::string& ca, CryptoSource ca_source, const std::string& cert,
                           CryptoSource cert_source, const std::string& pkey, CryptoSource pkey_source) {
   curlEasySetoptWrapper(curl, CURLOPT_SSL_VERIFYPEER, 1);
@@ -167,7 +171,7 @@ void HttpClient::setCerts(const std::string& ca, CryptoSource ca_source, const s
 }
 
 HttpResponse HttpClient::get(const std::string& url, int64_t maxsize) {
-  CURL* curl_get = Utils::curlDupHandleWrapper(curl, pkcs11_key);
+  CURL* curl_get = dupHandle(curl, pkcs11_key);
 
   curlEasySetoptWrapper(curl_get, CURLOPT_HTTPHEADER, headers);
 
@@ -187,7 +191,7 @@ HttpResponse HttpClient::get(const std::string& url, int64_t maxsize) {
 }
 
 HttpResponse HttpClient::post(const std::string& url, const std::string& content_type, const std::string& data) {
-  CURL* curl_post = Utils::curlDupHandleWrapper(curl, pkcs11_key);
+  CURL* curl_post = dupHandle(curl, pkcs11_key);
   curl_slist* req_headers = curl_slist_dup(headers);
   req_headers = curl_slist_append(req_headers, (std::string("Content-Type: ") + content_type).c_str());
   curlEasySetoptWrapper(curl_post, CURLOPT_HTTPHEADER, req_headers);
@@ -207,7 +211,7 @@ HttpResponse HttpClient::post(const std::string& url, const Json::Value& data) {
 }
 
 HttpResponse HttpClient::put(const std::string& url, const std::string& content_type, const std::string& data) {
-  CURL* curl_put = Utils::curlDupHandleWrapper(curl, pkcs11_key);
+  CURL* curl_put = dupHandle(curl, pkcs11_key);
   curl_slist* req_headers = curl_slist_dup(headers);
   req_headers = curl_slist_append(req_headers, (std::string("Content-Type: ") + content_type).c_str());
   curlEasySetoptWrapper(curl_put, CURLOPT_HTTPHEADER, req_headers);
@@ -273,7 +277,7 @@ HttpResponse HttpClient::download(const std::string& url, curl_write_callback wr
 std::future<HttpResponse> HttpClient::downloadAsync(const std::string& url, curl_write_callback write_cb,
                                                     curl_xferinfo_callback progress_cb, void* userp, curl_off_t from,
                                                     CurlHandler* easyp) {
-  CURL* curl_download = Utils::curlDupHandleWrapper(curl, pkcs11_key);
+  CURL* curl_download = dupHandle(curl, pkcs11_key);
 
   CurlHandler curlp = CurlHandler(curl_download, curl_easy_cleanup);
 
@@ -352,4 +356,47 @@ curl_slist* HttpClient::curl_slist_dup(curl_slist* sl) {
   return new_list;
 }
 
+/* Locking for curl share instance */
+static void curl_share_lock_cb(CURL* handle, curl_lock_data data, curl_lock_access access, void* userptr) {
+  (void)handle;
+  (void)access;
+  auto* mutexes = static_cast<std::array<std::mutex, CURL_LOCK_DATA_LAST>*>(userptr);
+  mutexes->at(data).lock();
+}
+
+static void curl_share_unlock_cb(CURL* handle, curl_lock_data data, void* userptr) {
+  (void)handle;
+  auto* mutexes = static_cast<std::array<std::mutex, CURL_LOCK_DATA_LAST>*>(userptr);
+  mutexes->at(data).unlock();
+}
+
+void HttpClientWithShare::initCurlShare() {
+  share_ = curl_share_init();
+  if (share_ == nullptr) {
+    throw std::runtime_error("Could not initialize share");
+  }
+
+  curl_share_setopt(share_, CURLSHOPT_SHARE, CURL_LOCK_DATA_SSL_SESSION);
+  curl_share_setopt(share_, CURLSHOPT_SHARE, CURL_LOCK_DATA_DNS);
+  curl_share_setopt(share_, CURLSHOPT_SHARE, CURL_LOCK_DATA_CONNECT);
+  curl_share_setopt(share_, CURLSHOPT_LOCKFUNC, curl_share_lock_cb);
+  curl_share_setopt(share_, CURLSHOPT_UNLOCKFUNC, curl_share_unlock_cb);
+  curl_share_setopt(share_, CURLSHOPT_USERDATA, &curl_share_mutexes);
+  curl_easy_setopt(curl, CURLOPT_SHARE, share_);
+}
+
+CURL* HttpClientWithShare::dupHandle(CURL* const curl_in, const bool using_pkcs11) {
+  return Utils::curlDupHandleWrapper(curl_in, using_pkcs11, share_);
+}
+
+HttpClientWithShare::HttpClientWithShare(const std::vector<std::string>* extra_headers,
+                                         const std::set<std::string>* response_header_names)
+    : HttpClient(extra_headers, response_header_names) {
+  initCurlShare();
+}
+HttpClientWithShare::HttpClientWithShare(const std::string& socket) : HttpClient(socket) { initCurlShare(); }
+
+HttpClientWithShare::HttpClientWithShare(const HttpClientWithShare& curl_in) : HttpClient(curl_in) { initCurlShare(); }
+
+HttpClientWithShare::~HttpClientWithShare() { curl_share_cleanup(share_); }
 // vim: set tabstop=2 shiftwidth=2 expandtab:

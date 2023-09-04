@@ -50,14 +50,17 @@ class HttpClient : public HttpInterface {
   bool updateHeader(const std::string &name, const std::string &value);
   void timeout(int64_t ms);
 
+ protected:
+    CURL *curl;
+
  private:
   FRIEND_TEST(GetTest, download_speed_limit);
 
   static const CurlGlobalInitWrapper manageCurlGlobalInit_;
-  CURL *curl;
   curl_slist *headers;
   HttpResponse perform(CURL *curl_handler, int retry_times, int64_t size_limit);
   static curl_slist *curl_slist_dup(curl_slist *sl);
+  virtual CURL *dupHandle(CURL *const curl_in, const bool using_pkcs11);
 
   std::unique_ptr<TemporaryFile> tls_ca_file;
   std::unique_ptr<TemporaryFile> tls_cert_file;
@@ -76,4 +79,23 @@ class HttpClient : public HttpInterface {
   bool pkcs11_cert{false};
   std::set<std::string> response_header_names_;
 };
+
+class HttpClientWithShare : public HttpClient {
+ public:
+  explicit HttpClientWithShare(const std::vector<std::string> *extra_headers = nullptr,
+                               const std::set<std::string> *response_header_names = nullptr);
+  explicit HttpClientWithShare(const std::string &socket);
+  HttpClientWithShare(const HttpClientWithShare &curl_in);  // non-default!
+  ~HttpClientWithShare() override;
+  HttpClientWithShare(HttpClientWithShare &&) = default;
+
+ protected:
+  virtual CURL *dupHandle(CURL *const curl_in, const bool using_pkcs11) override;
+  void initCurlShare();
+
+ private:
+  CURLSH *share_{nullptr};
+  std::array<std::mutex, CURL_LOCK_DATA_LAST> curl_share_mutexes;
+};
+
 #endif
