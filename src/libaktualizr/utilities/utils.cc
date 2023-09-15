@@ -825,6 +825,7 @@ CURL *Utils::curlDupHandleWrapper(CURL *const curl_in, const bool using_pkcs11, 
     curlEasySetoptWrapper(curl, CURLOPT_SSLENGINE, "pkcs11");
   }
   if (share != nullptr) {
+    std::cerr << " ** enabling share **" << std:: endl;
     curl_easy_setopt(curl, CURLOPT_SHARE, share);
   }
   return curl;
