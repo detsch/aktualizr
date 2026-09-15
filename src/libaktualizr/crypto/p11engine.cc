@@ -11,6 +11,10 @@
 #include <boost/filesystem.hpp>
 #include <boost/scoped_array.hpp>
 
+#if AKTUALIZR_OPENSSL_PROVIDERS
+#include <cstdlib>
+#endif
+
 #include "crypto/crypto.h"
 #include "utilities/config_utils.h"
 #include "utilities/utils.h"
@@ -84,6 +88,14 @@ P11Engine::P11Engine(boost::filesystem::path module_path, std::string pass, std:
 
   uri_prefix_ = std::string("pkcs11:serial=") + slot->token->serialnr + ";pin-value=" + pass_ + ";id=%";
 
+#if AKTUALIZR_OPENSSL_PROVIDERS
+  // curl loads the pkcs11-provider into its own private OpenSSL library context for "PROV" TLS
+  // cert/key URIs, and the provider takes the PKCS#11 module path from this env var.
+  // The provider is deliberately not loaded into the default library context here: modules that
+  // use OpenSSL themselves (e.g. SoftHSM2) would then get their internal crypto routed back into
+  // the provider and deadlock re-entering the module.
+  setenv("PKCS11_PROVIDER_MODULE", module_path_.c_str(), 1);
+#else
   ENGINE_load_builtin_engines();
   ENGINE* engine = ENGINE_by_id("dynamic");
 
@@ -130,8 +142,58 @@ P11Engine::P11Engine(boost::filesystem::path module_path, std::string pass, std:
   }
 
   ssl_engine_ = engine;
+#endif
 }
 
+#if AKTUALIZR_OPENSSL_PROVIDERS
+EVP_PKEY* P11Engine::loadPrivateKey(const std::string& key_id) const {
+  if ((key_id.length() % 2) != 0U) {
+    LOG_ERROR << "Invalid key id " << key_id << ": expected a hex string";
+    return nullptr;
+  }
+
+  PKCS11_SLOT* slot = findTokenSlot();
+  if (slot == nullptr) {
+    return nullptr;
+  }
+
+  PKCS11_KEY* keys;
+  unsigned int nkeys;
+  if (PKCS11_enumerate_keys(slot->token, &keys, &nkeys) != 0) {
+    LOG_ERROR << "Error enumerating private keys in PKCS11 device: " << ERR_error_string(ERR_get_error(), nullptr);
+    return nullptr;
+  }
+
+  PKCS11_KEY* key = nullptr;
+  {
+    std::vector<unsigned char> id_hex;
+    boost::algorithm::unhex(key_id, std::back_inserter(id_hex));
+
+    for (unsigned int i = 0; i < nkeys; i++) {
+      // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+      if ((keys[i].id_len == key_id.length() / 2) &&
+          // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+          (memcmp(keys[i].id, id_hex.data(), key_id.length() / 2) == 0)) {
+        // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-pointer-arithmetic)
+        key = &keys[i];
+        break;
+      }
+    }
+  }
+  if (key == nullptr) {
+    LOG_ERROR << "Requested private key " << key_id << " was not found";
+    return nullptr;
+  }
+
+  // libp11 rather than OSSL_STORE, so no pkcs11-provider has to be loaded into the default OpenSSL
+  // library context (see the constructor).
+  EVP_PKEY* pkey = PKCS11_get_private_key(key);
+  if (pkey == nullptr) {
+    LOG_ERROR << "Couldn't load private key " << key_id << ": " << ERR_error_string(ERR_get_error(), nullptr);
+  }
+  return pkey;
+}
+#else
 // Hack for clang-tidy
 #ifndef PKCS11_ENGINE_PATH
 #define PKCS11_ENGINE_PATH "dummy"
@@ -147,6 +209,7 @@ boost::filesystem::path P11Engine::findPkcsLibrary() {
 
   return engine_path;
 }
+#endif
 
 PKCS11_SLOT* P11Engine::findTokenSlot() const {
   PKCS11_SLOT* slot{nullptr};

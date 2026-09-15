@@ -282,14 +282,18 @@ void KeyManager::copyCertsToCurl(HttpInterface &http) const {
 }
 
 Json::Value KeyManager::signTuf(const Json::Value &in_data) const {
-  ENGINE *crypto_engine = nullptr;
+  P11KeyHandle p11_key = nullptr;
   std::string private_key;
   if (config_.uptane_key_source == CryptoSource::kPkcs11) {
     if (!built_with_p11) {
       throw std::runtime_error("Aktualizr was built without PKCS#11");
     }
-    crypto_engine = (*p11_)->getEngine();
+#if AKTUALIZR_OPENSSL_PROVIDERS
+    p11_key = (*p11_)->loadPrivateKey(config_.p11.uptane_key_id);
+#else
+    p11_key = (*p11_)->getEngine();
     private_key = config_.p11.uptane_key_id;
+#endif
   }
 
   std::string b64sig;
@@ -297,7 +301,10 @@ Json::Value KeyManager::signTuf(const Json::Value &in_data) const {
     backend_->loadPrimaryPrivate(&private_key);
   }
   b64sig = Utils::toBase64(
-      Crypto::Sign(config_.uptane_key_type, crypto_engine, private_key, Utils::jsonToCanonicalStr(in_data)));
+      Crypto::Sign(config_.uptane_key_type, p11_key, private_key, Utils::jsonToCanonicalStr(in_data)));
+#if AKTUALIZR_OPENSSL_PROVIDERS
+  EVP_PKEY_free(p11_key);
+#endif
 
   Json::Value signature;
   switch (config_.uptane_key_type) {
